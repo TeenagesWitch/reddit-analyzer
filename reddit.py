@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
+import threading
 import json
 import os
 import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-# To run this script by double-clicking:
-# - On Linux/macOS: make the file executable: chmod +x reddit.py
-# - On Windows: rename to reddit.pyw (uses pythonw to suppress console)
-
-
-def extract_unique_authors(file_paths):
+def extract_unique_authors(file_paths, update_progress):
     unique_authors = set()
+    total_lines = sum(
+        sum(1 for _ in open(path, "r", encoding="utf-8"))
+        for path in file_paths if os.path.isfile(path)
+    )
+
+    processed = 0
     for path in file_paths:
         if not os.path.isfile(path):
             continue
@@ -24,8 +26,10 @@ def extract_unique_authors(file_paths):
                         unique_authors.add(author)
                 except json.JSONDecodeError:
                     continue
-    return sorted(unique_authors)
+                processed += 1
+                update_progress(min(int((processed / total_lines) * 100), 100))
 
+    return sorted(unique_authors)
 
 def load_authors_from_txt(files, skip_list=None, skip_bots=True):
     if skip_list is None:
@@ -87,7 +91,54 @@ class GUIApp:
 
         self.unique_count = tk.StringVar(value="Total unique authors: 0")
         ttk.Label(frame, textvariable=self.unique_count).grid(row=3, column=0, pady=10)
-        ttk.Button(frame, text="Extract & Save", command=self._handle_unique).grid(row=4, column=0)
+
+        self.extract_btn = ttk.Button(frame, text="Extract & Save", command=self._handle_unique_async)
+        self.extract_btn.grid(row=4, column=0, columnspan=2, pady=5)
+
+        self.progress_var = tk.IntVar(value=0)
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure("Modern.Horizontal.TProgressbar", troughcolor='#e0e0e0', bordercolor='#cccccc', background='#4caf50', lightcolor='#6fcf97', darkcolor='#388e3c')
+        self.progress = ttk.Progressbar(frame, mode='determinate', style="Modern.Horizontal.TProgressbar", variable=self.progress_var, maximum=100)
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+
+    def _handle_unique_async(self):
+        paths = [var.get() for var in self.jsonl_paths if var.get() and os.path.isfile(var.get())]
+        if len(paths) != 2:
+            messagebox.showerror("Error", "Please select two valid JSONL files.")
+            return
+
+        save_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+        if not save_path:
+            return
+
+        self.extract_btn.config(state='disabled')
+        self.progress_var.set(0)
+
+        def update_progress(percent):
+            self.root.after(0, lambda: self.progress_var.set(percent))
+
+        def run():
+            try:
+                authors = extract_unique_authors(paths, update_progress)
+                with open(save_path, "w", encoding="utf-8") as f:
+                    for a in authors:
+                        f.write(a + "\n")
+                self.root.after(0, lambda: self._on_unique_done(len(authors), save_path))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            finally:
+                self.root.after(0, lambda: self.extract_btn.config(state='normal'))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_unique_done(self, count, path):
+        self.unique_count.set(f"Total unique authors: {count}")
+        messagebox.showinfo("Saved", f"Saved to {path}")
+
+    def _reset_progress(self):
+        self.progress.stop()
+        self.extract_btn.config(state='normal')
 
     def _build_overlap_tab(self, parent):
         frame = ttk.Frame(parent, padding=10)
@@ -177,19 +228,6 @@ class GUIApp:
                 self.txt_set1 = list(files); self.set1_var.set(names)
             else:
                 self.txt_set2 = list(files); self.set2_var.set(names)
-
-    def _handle_unique(self):
-        paths = [var.get() for var in self.jsonl_paths]
-        authors = extract_unique_authors(paths)
-        self.unique_count.set(f"Total unique authors: {len(authors)}")
-        if not authors:
-            messagebox.showinfo("No Authors","No authors found.")
-            return
-        save_path = filedialog.asksaveasfilename(defaultextension=".txt",filetypes=[("Text files","*.txt")])
-        if save_path:
-            with open(save_path,"w",encoding="utf-8") as f:
-                for a in authors: f.write(a+"\n")
-            messagebox.showinfo("Saved",f"Saved to {save_path}")
 
     def _handle_overlap(self):
         if not (self.txt_set1 and self.txt_set2):
