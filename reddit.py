@@ -6,8 +6,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 # To run this script by double-clicking:
-# - On Linux/macOS: make the file executable: chmod +x gui_app.py
-# - On Windows: rename to gui_app.pyw (uses pythonw to suppress console)
+# - On Linux/macOS: make the file executable: chmod +x reddit.py
+# - On Windows: rename to reddit.pyw (uses pythonw to suppress console)
 
 
 def extract_unique_authors(file_paths):
