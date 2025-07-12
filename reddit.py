@@ -278,13 +278,52 @@ class GUIApp:
     def _show_overlap_popup(self, authors):
         popup = tk.Toplevel(self.root)
         popup.title('Overlapping Authors')
+        # Filter frame
+        filter_frame = ttk.Frame(popup)
+        filter_frame.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Label(filter_frame, text='Filter by status:').pack(side='left')
+        status_options = ['All'] + list(STATUS_CODES.keys())
+        filter_var = tk.StringVar(value='All')
+        combobox = ttk.Combobox(filter_frame, values=status_options, textvariable=filter_var, state='readonly', width=10)
+        combobox.pack(side='left', padx=(5, 0))
+
+        # Table frame
         frame = ttk.Frame(popup, padding=10)
         frame.pack(fill='both', expand=True)
 
-        # Treeview table setup including Last Activity
         columns = ('Username', 'Status', 'Birth Date', 'Last Activity')
         tree = ttk.Treeview(frame, columns=columns, show='headings')
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, anchor='w')
 
+        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        tree.pack(side='left', fill='both', expand=True)
+
+        # Prepare data
+        all_rows = []
+        for author in authors:
+            code, birth, last = get_account_info(author)
+            self.status_codes.append(code)
+            all_rows.append((author, STATUS_LABELS.get(code, 'unknown'), birth, last))
+
+        def populate(status_filter):
+            tree.delete(*tree.get_children())
+            for author, stat, birth, last in all_rows:
+                if status_filter == 'All' or stat == status_filter:
+                    tree.insert('', 'end', values=(author, stat, birth, last))
+
+        # Initial populate
+        populate('All')
+
+        # Filter callback
+        def on_filter_change(event):
+            populate(filter_var.get())
+        combobox.bind('<<ComboboxSelected>>', on_filter_change)
+
+        # Enable sorting
         def sort_column(tv, col, reverse=False):
             data_list = [(tv.set(child, col), child) for child in tv.get_children('')]
             if col in ['Birth Date', 'Last Activity']:
@@ -302,21 +341,8 @@ class GUIApp:
 
         for col in columns:
             tree.heading(col, text=col, command=lambda _col=col: sort_column(tree, _col, False))
-            tree.column(col, anchor='w')
 
-        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side='right', fill='y')
-        tree.pack(side='left', fill='both', expand=True)
-
-        # Reset status list
-        self.status_codes = []
-        for author in authors:
-            code, birth_date, last_activity = get_account_info(author)
-            self.status_codes.append(code)
-            label = STATUS_LABELS.get(code, 'unknown')
-            tree.insert('', 'end', values=(author, label, birth_date, last_activity))
-
+        # Double-click to open profile
         def on_double_click(event):
             sel = tree.selection()
             if sel:
