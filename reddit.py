@@ -11,8 +11,23 @@ from tkinter import filedialog, messagebox, ttk
 # Persistent HTTP session to reduce overhead
 session = requests.Session()
 
-# Default skip list
-DEFAULT_SKIPS = {"[deleted]", "automoderator", "thesunflowerseeds", "waitingtobetriggered", "b0trank"}
+# Skip list file path
+SKIP_LIST_FILE = 'skip_list.txt'
+
+def load_skip_list():
+    if not os.path.isfile(SKIP_LIST_FILE):
+        # Create file with some defaults if missing
+        with open(SKIP_LIST_FILE, 'w', encoding='utf-8') as f:
+            f.write("[deleted]\nautomoderator\nthesunflowerseeds\nwaitingtobetriggered\nb0trank\n")
+    with open(SKIP_LIST_FILE, 'r', encoding='utf-8') as f:
+        return set(line.strip().lower() for line in f if line.strip())
+
+def save_skip_list(skip_list):
+    with open(SKIP_LIST_FILE, 'w', encoding='utf-8') as f:
+        for item in sorted(skip_list):
+            f.write(item + '\n')
+
+DEFAULT_SKIPS = load_skip_list()
 
 # Status code mapping
 STATUS_CODES = {'deleted': 0, 'active': 1, 'suspended': 2}
@@ -370,6 +385,7 @@ class GUIApp:
             self.skip_list.append(val)
             self.skip_listbox.insert('end', val)
             self.new_skip_var.set('')
+            save_skip_list(self.skip_list)
 
     def _remove_skip(self):
         sel = self.skip_listbox.curselection()
@@ -377,6 +393,7 @@ class GUIApp:
             val = self.skip_listbox.get(i)
             self.skip_list.remove(val)
             self.skip_listbox.delete(i)
+            save_skip_list(self.skip_list)
 
 if __name__ == '__main__':
     root = tk.Tk()
