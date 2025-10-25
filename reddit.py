@@ -1,7 +1,26 @@
 #!/usr/bin/env python3
-import threading
-import json
+"""
+Author Tools GUI - Extended
+Adds a new tab "Creation Year Distribution" that accepts one .txt file of usernames,
+fetches account creation dates (via Reddit "about" endpoint / fallback Photon search),
+computes a per-year distribution, shows it in a TreeView, provides a dropdown to filter
+by year, and allows exporting the filtered usernames to a .txt file.
+
+How to use:
+- Run this script (requires Python 3.8+ and `requests`)
+- Use the new tab: select a single TXT file containing one username per line, then
+  click "Analyze" to fetch creation dates and populate the UI.
+
+Notes:
+- Network calls run on a background thread to keep the UI responsive.
+- Basic error handling and timeouts are included.
+- Re-uses helper functions for account info already present in previous toolset.
+
+"""
+
 import os
+import json
+import threading
 import datetime
 import webbrowser
 import requests
@@ -16,6 +35,9 @@ REQUEST_TIMEOUT = 6  # seconds
 MAX_WORKERS = 10  # number of concurrent threads for fetching
 
 SKIP_LIST_FILE = 'skip_list.txt'
+
+# Cache for runtime
+CACHE = {}
 
 # --- Helper functions (re-usable) ---
 
@@ -231,6 +253,10 @@ class GUIApp:
         # Store fetched results
         self._all_results = []  # list of dicts: {'username','date','year','status'}
 
+        # Sorting
+        for col in ('Username', 'Creation Date', 'Status'):
+            self.detail_tree.heading(col, text=col, command=lambda c=col: self._sort_detail_tree(c, False))
+
         # Double-click opens user profile
         self.detail_tree.bind('<Double-1>', self._on_double_click_user)
 
@@ -379,6 +405,13 @@ class GUIApp:
             messagebox.showinfo('Saved', f'Exported {len(filtered)} usernames to {path}')
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save file: {e}')
+
+    def _sort_detail_tree(self, col, reverse):
+        data = [(self.detail_tree.set(k, col), k) for k in self.detail_tree.get_children('')]
+        data.sort(reverse=reverse)
+        for index, (_, k) in enumerate(data):
+            self.detail_tree.move(k, '', index)
+        self.detail_tree.heading(col, command=lambda: self._sort_detail_tree(col, not reverse))
 
     def _on_double_click_user(self, event):
         sel = self.detail_tree.selection()
