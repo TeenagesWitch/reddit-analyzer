@@ -16,7 +16,7 @@ class MainApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title('Author Tools GUI - Integrated')
+        self.title('Reddit Analyzer')
         self.geometry('1100x700')
         self._build_ui()
 

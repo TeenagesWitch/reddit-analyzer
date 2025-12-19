@@ -87,18 +87,26 @@ class OverlappingUsersTab(ttk.Frame):
             messagebox.showerror('Error', 'Failed to read one or more TXT files.')
             return
 
-        overlap_counts = {}
-        for dataset in datasets:
-            for user in dataset:
-                overlap_counts[user] = overlap_counts.get(user, 0) + 1
-
-        overlapping = [u for u, c in overlap_counts.items() if c > 1]
+        num_files = len(datasets)
+        
+        # Find users that appear in ALL files
+        # Start with users from the first file
+        overlapping = set(datasets[0])
+        
+        # Intersect with each subsequent file to find common users
+        for dataset in datasets[1:]:
+            overlapping &= dataset
+        
         if not overlapping:
-            messagebox.showinfo('No Overlap', 'No overlapping usernames found.')
+            messagebox.showinfo('No Overlap', f'No usernames found in all {num_files} files.')
             return
 
+        # Create overlap_counts dict with all users having count = num_files
+        overlap_counts = {u: num_files for u in overlapping}
+        overlapping = list(overlapping)
+
         self.progress.config(maximum=len(overlapping), value=0)
-        self.status_label.config(text='Fetching creation dates...')
+        self.status_label.config(text=f'Fetching creation dates for {len(overlapping)} users in all {num_files} files...')
         threading.Thread(target=self._fetch_creation_dates, args=(overlapping, overlap_counts), daemon=True).start()
 
     def _fetch_creation_dates(self, usernames, overlap_counts):
