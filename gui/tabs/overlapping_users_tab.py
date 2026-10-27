@@ -1,6 +1,7 @@
 """Overlapping Users Tab."""
 
 import os
+import re
 import threading
 import webbrowser
 import tkinter as tk
@@ -8,8 +9,9 @@ from tkinter import filedialog, messagebox, ttk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import MAX_WORKERS, STATUS_LABELS
+from cache import flush_cache
 from skip_list import DEFAULT_SKIPS
-from reddit_api import get_account_info
+from reddit_api import get_account_info, describe_creation_date
 
 
 class OverlappingUsersTab(ttk.Frame):
@@ -64,16 +66,17 @@ class OverlappingUsersTab(ttk.Frame):
             var.set(path)
 
     def _extract_usernames(self, path):
+        """Return {lowercased username: username as written}; Reddit usernames are case-insensitive."""
         skip_set = set(DEFAULT_SKIPS)
-        usernames = set()
+        usernames = {}
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
                     u = line.strip()
                     if u and u.lower() not in skip_set and not u.lower().endswith('bot'):
-                        usernames.add(u)
+                        usernames.setdefault(u.lower(), u)
         except Exception:
-            return set()
+            return {}
         return usernames
 
     def _start_analyze(self):
@@ -89,21 +92,23 @@ class OverlappingUsersTab(ttk.Frame):
 
         num_files = len(datasets)
         
-        # Find users that appear in ALL files
+        # Find users that appear in ALL files, comparing lowercased names
         # Start with users from the first file
-        overlapping = set(datasets[0])
-        
+        overlapping_keys = set(datasets[0])
+
         # Intersect with each subsequent file to find common users
         for dataset in datasets[1:]:
-            overlapping &= dataset
-        
-        if not overlapping:
+            overlapping_keys &= dataset.keys()
+
+        if not overlapping_keys:
             messagebox.showinfo('No Overlap', f'No usernames found in all {num_files} files.')
             return
 
+        # Display each user as written in the first file
+        overlapping = [datasets[0][k] for k in overlapping_keys]
+
         # Create overlap_counts dict with all users having count = num_files
         overlap_counts = {u: num_files for u in overlapping}
-        overlapping = list(overlapping)
 
         self.progress.config(maximum=len(overlapping), value=0)
         self.status_label.config(text=f'Fetching creation dates for {len(overlapping)} users in all {num_files} files...')
@@ -119,21 +124,24 @@ class OverlappingUsersTab(ttk.Frame):
             for fut in as_completed(futures):
                 u = futures[fut]
                 try:
-                    status_code, birth, _, _ = fut.result()
+                    status_code, birth, _, source = fut.result()
                     year = 'Unknown'
                     if birth and birth != 'Unknown':
                         try:
                             year = int(birth.split('-')[0])
                         except Exception:
                             pass
-                    status_label = STATUS_LABELS.get(status_code, 'active')
-                    results.append({'username': u, 'count': overlap_counts[u], 'date': birth, 'year': year, 'status': status_label})
+                    status_label = STATUS_LABELS.get(status_code, 'unknown')
+                    results.append({'username': u, 'count': overlap_counts[u], 'date': birth, 'source': source,
+                                    'year': year, 'status': status_label})
                 except Exception:
-                    results.append({'username': u, 'count': overlap_counts[u], 'date': 'Unknown', 'year': 'Unknown', 'status': 'active'})
+                    results.append({'username': u, 'count': overlap_counts[u], 'date': 'Unknown', 'source': 'Unknown',
+                                    'year': 'Unknown', 'status': 'unknown'})
 
                 completed += 1
                 self.after(0, lambda c=completed: self._update_progress(c, total))
 
+        flush_cache()
         results.sort(key=lambda x: (x['year'] if isinstance(x['year'], int) else 9999, x['username'].lower()))
         self.results = results
         self.after(0, self._populate_table)
@@ -151,13 +159,17 @@ class OverlappingUsersTab(ttk.Frame):
         years = set()
         for r in self.results:
             years.add(str(r['year']))
-            self.tree.insert('', 'end', values=(r['username'], r['count'], r['date'], r['year'], r['status']))
+            self.tree.insert('', 'end', values=self._row_values(r))
 
         dropdown_values = ['All'] + sorted([y for y in years if y != 'Unknown'])
         if 'Unknown' in years:
             dropdown_values.append('Unknown')
         self.year_dropdown.config(values=dropdown_values)
         self.year_dropdown.set('All')
+
+    @staticmethod
+    def _row_values(r):
+        return (r['username'], r['count'], describe_creation_date(r['date'], r.get('source')), r['year'], r['status'])
 
     def _apply_year_filter(self):
         sel = self.year_var.get()
@@ -168,7 +180,7 @@ class OverlappingUsersTab(ttk.Frame):
         else:
             data = [r for r in self.results if str(r['year']) == sel]
         for r in data:
-            self.tree.insert('', 'end', values=(r['username'], r['count'], r['date'], r['year'], r['status']))
+            self.tree.insert('', 'end', values=self._row_values(r))
 
     def _export_filtered(self):
         sel = self.year_var.get()
@@ -185,7 +197,9 @@ class OverlappingUsersTab(ttk.Frame):
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 for r in data:
-                    f.write(f"{r['username']}\t{r['count']}\t{r['date']}\t{r['year']}\t{r['status']}\n")
+                    # Last column says where the date came from: Reddit, or the first known activity
+                    date_source = {'True': 'reddit', 'Estimated': 'first_activity'}.get(r.get('source'), 'unknown')
+                    f.write(f"{r['username']}\t{r['count']}\t{r['date']}\t{r['year']}\t{r['status']}\t{date_source}\n")
             messagebox.showinfo('Saved', f'Exported {len(data)} usernames to {path}')
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save file: {e}')
@@ -205,6 +219,12 @@ class OverlappingUsersTab(ttk.Frame):
             data.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 0, reverse=reverse)
         elif col == 'Year':
             data.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 9999, reverse=reverse)
+        elif col == 'Creation Date':
+            # Sort on the date itself, ignoring the '(first activity)' wording around estimates
+            def date_key(x):
+                m = re.search(r'\d{4}-\d{2}-\d{2}', x[0])
+                return m.group(0) if m else '9999'
+            data.sort(key=date_key, reverse=reverse)
         else:
             data.sort(key=lambda x: x[0].lower(), reverse=reverse)
         for index, (_, k) in enumerate(data):

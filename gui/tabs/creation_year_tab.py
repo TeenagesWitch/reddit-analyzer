@@ -1,6 +1,7 @@
 """Creation Year Distribution Tab."""
 
 import os
+import re
 import threading
 import datetime
 import webbrowser
@@ -9,9 +10,9 @@ from tkinter import filedialog, messagebox, ttk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import PAGE_SIZE, MAX_WORKERS, STATUS_LABELS, STATUS_CODES
-from cache import CACHE, CACHE_LOCK
+from cache import flush_cache
 from skip_list import DEFAULT_SKIPS
-from reddit_api import get_account_info
+from reddit_api import get_account_info, get_cached_account_info, describe_creation_date
 
 
 class CreationYearTab(ttk.Frame):
@@ -58,8 +59,11 @@ class CreationYearTab(ttk.Frame):
         left = ttk.Frame(mid)
         left.pack(side='left', fill='both', expand=True)
         ttk.Label(left, text='Year Distribution (current page only)').pack(anchor='w')
-        self.dist_tree = ttk.Treeview(left, columns=('Year', 'Count'), show='headings', height=14)
-        for c in ('Year', 'Count'):
+        ttk.Label(left, text='Confirmed = creation date from Reddit; the rest use the year of first activity',
+                  foreground='gray').pack(anchor='w')
+        dist_cols = ('Year', 'Count', 'Confirmed')
+        self.dist_tree = ttk.Treeview(left, columns=dist_cols, show='headings', height=14)
+        for c in dist_cols:
             self.dist_tree.heading(c, text=c)
             self.dist_tree.column(c, anchor='w')
         self.dist_tree.pack(fill='both', expand=True, padx=(0, 8))
@@ -145,31 +149,33 @@ class CreationYearTab(ttk.Frame):
 
     def _load_page(self, page_index: int):
         self._current_usernames = list(self._user_pages[page_index])
+        # Only one page may load at a time, or a slower earlier fetch overwrites the newer page's results
         self.analyze_btn.config(state='disabled')
+        self.prev_btn.config(state='disabled')
+        self.next_btn.config(state='disabled')
         self.progress.config(maximum=len(self._current_usernames), value=0)
         self.cache_hits_label.config(text='Cache hits: 0')
         self._all_results.clear()
         threading.Thread(target=self._fetch_page_thread, args=(self._current_usernames,), daemon=True).start()
 
     def _fetch_page_thread(self, usernames):
+        try:
+            self._all_results = self._fetch_page_results(usernames)
+        finally:
+            # Always hand control back to the UI so the buttons are re-enabled
+            self.after(0, self._on_page_results_ready)
+
+    def _fetch_page_results(self, usernames):
         results = []
         cache_hits = 0
         users_to_fetch = []
-        with CACHE_LOCK:
-            for u in usernames:
-                lower = u.lower()
-                if lower in CACHE:
-                    entry = CACHE[lower]
-                    results.append({
-                        'username': u,
-                        'date': entry.get('birth_date', 'Unknown'),
-                        'year': int(entry['birth_date'].split('-')[0]) if entry.get('birth_date') and entry['birth_date'] != 'Unknown' else 'Unknown',
-                        'status': STATUS_LABELS.get(entry.get('status_code', STATUS_CODES['active']), 'active'),
-                        'source': entry.get('source', 'Unknown')
-                    })
-                    cache_hits += 1
-                else:
-                    users_to_fetch.append(u)
+        for u in usernames:
+            cached = get_cached_account_info(u)
+            if cached:
+                results.append(self._make_record(u, cached))
+                cache_hits += 1
+            else:
+                users_to_fetch.append(u)
         self.after(0, lambda: self.cache_hits_label.config(text=f'Cache hits: {cache_hits}'))
         if users_to_fetch:
             with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(users_to_fetch)))) as ex:
@@ -180,51 +186,46 @@ class CreationYearTab(ttk.Frame):
                     try:
                         rec = fut.result()
                     except Exception:
-                        rec = {'username': u, 'date': 'Unknown', 'year': 'Unknown', 'status': 'active', 'source': 'Unknown'}
+                        rec = self._make_record(u, (STATUS_CODES['unknown'], 'Unknown', 'Unknown', 'Unknown'))
                     results.append(rec)
                     completed += 1
                     self.after(0, lambda c=completed + cache_hits: self.progress.config(value=c))
-        normalized = []
-        for r in results:
-            y = r.get('year', 'Unknown')
-            if isinstance(y, int):
-                normalized.append(r)
-            else:
-                try:
-                    normalized.append({**r, 'year': int(str(y))})
-                except Exception:
-                    normalized.append({**r, 'year': 'Unknown'})
-        normalized.sort(key=lambda rr: (rr['year'] if isinstance(rr['year'], int) else 9999, rr['username'].lower()))
-        self._all_results = normalized
-        self.after(0, self._on_page_results_ready)
+            flush_cache()
+        results.sort(key=lambda rr: (rr['year'] if isinstance(rr['year'], int) else 9999, rr['username'].lower()))
+        return results
 
     def _fetch_single_user_record(self, username: str) -> dict:
-        status_code, birth, last, source = get_account_info(username)
-        status_label = STATUS_LABELS.get(status_code, 'active')
+        return self._make_record(username, get_account_info(username))
+
+    @staticmethod
+    def _make_record(username, account_info) -> dict:
+        status_code, birth, _last, source = account_info
         year = 'Unknown'
         if birth and birth != 'Unknown':
             try:
                 year = int(birth.split('-')[0])
-            except Exception:
-                year = 'Unknown'
-        return {'username': username, 'date': birth, 'year': year, 'status': status_label, 'source': source}
+            except ValueError:
+                pass
+        return {'username': username, 'date': birth, 'year': year,
+                'status': STATUS_LABELS.get(status_code, 'unknown'), 'source': source}
 
     def _on_page_results_ready(self):
         self.analyze_btn.config(state='normal')
+        self._update_nav_buttons()
         self.progress.config(value=0)
         dist = {}
+        confirmed = {}
         for r in self._all_results:
-            y = r['year']
-            if isinstance(y, int):
-                dist[y] = dist.get(y, 0) + 1
-            else:
-                dist['Unknown'] = dist.get('Unknown', 0) + 1
+            y = r['year'] if isinstance(r['year'], int) else 'Unknown'
+            dist[y] = dist.get(y, 0) + 1
+            if r.get('source') == 'True':
+                confirmed[y] = confirmed.get(y, 0) + 1
         self.dist_tree.delete(*self.dist_tree.get_children())
         years_sorted = sorted([k for k in dist.keys() if k != 'Unknown'])
         for y in years_sorted:
-            self.dist_tree.insert('', 'end', values=(y, dist[y]))
+            self.dist_tree.insert('', 'end', values=(y, dist[y], confirmed.get(y, 0)))
         if 'Unknown' in dist:
-            self.dist_tree.insert('', 'end', values=('Unknown', dist['Unknown']))
+            self.dist_tree.insert('', 'end', values=('Unknown', dist['Unknown'], 0))
         dropdown_values = ['All'] + [str(y) for y in years_sorted]
         if 'Unknown' in dist:
             dropdown_values.append('Unknown')
@@ -235,11 +236,7 @@ class CreationYearTab(ttk.Frame):
     def _populate_detail_tree(self, rows):
         self.detail_tree.delete(*self.detail_tree.get_children())
         for r in rows:
-            date_val = r.get('date', 'Unknown')
-            if date_val and date_val != 'Unknown' and r.get('source') != 'True':
-                date_display = f"{date_val} (estimated)"
-            else:
-                date_display = date_val
+            date_display = describe_creation_date(r.get('date', 'Unknown'), r.get('source'))
             self.detail_tree.insert('', 'end', values=(r['username'], date_display, r['status']))
 
     def _apply_year_filter(self):
@@ -288,10 +285,10 @@ class CreationYearTab(ttk.Frame):
         for it in items:
             val = self.detail_tree.set(it, col)
             if col == 'Creation Date':
-                v = val.split(' ')[0] if val else ''
+                m = re.search(r'\d{4}-\d{2}-\d{2}', val or '')
                 try:
-                    key = datetime.datetime.strptime(v, '%Y-%m-%d') if v and v != 'Unknown' else datetime.datetime.min
-                except Exception:
+                    key = datetime.datetime.strptime(m.group(0), '%Y-%m-%d') if m else datetime.datetime.min
+                except ValueError:
                     key = datetime.datetime.min
             else:
                 key = val.lower() if isinstance(val, str) else val

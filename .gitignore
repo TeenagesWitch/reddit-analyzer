@@ -22,6 +22,8 @@ ENV/
 # Application specific
 skip_list.txt
 creation_cache.json
+creation_cache.json.tmp
+reddit_credentials.json
 reddit.spec
 reddit.spec.exe
 

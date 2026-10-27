@@ -85,7 +85,7 @@ Find users that appear in all submitted files (set intersection).
 
 **Features:**
 - **Multi-File Analysis**: Find users present in ALL submitted files
-- **Account Information**: Fetches creation dates and account status via Reddit API
+- **Account Information**: Fetches creation dates and account status via Reddit API (see below for the optional login)
 - **Year Filtering**: Filter results by account creation year
 - **Progress Tracking**: Real-time progress updates during API calls
 - **Export Results**: View and export overlapping users with their account details
@@ -94,6 +94,30 @@ Find users that appear in all submitted files (set intersection).
 ### 5. Settings
 
 Configuration and application settings.
+
+- **Skip List**: Usernames to ignore in every tab
+- **Reddit API login (optional)**: Client ID and secret of your own Reddit app, used for account lookups
+
+### Account dates and status: with and without a Reddit login
+
+Reddit refuses most anonymous requests, so without a login the Creation Year and Overlapping Users tabs
+can't get real creation dates or account status:
+
+- **Creation date** falls back to the account's first known post or comment (from Arctic Shift),
+  shown as `≤ 2019-03-11 (first activity)`: the account was created on or before that date.
+  The Year Distribution's **Confirmed** column counts only dates that came from Reddit.
+- **Status** is shown as `unknown`. Lookups Reddit didn't answer are retried after 7 days.
+
+To get real dates and status (deleted, suspended, active):
+
+1. Go to https://www.reddit.com/prefs/apps and create an app of type **script**
+   (any name; the redirect URI can be `http://localhost:8080`).
+2. In the **Settings** tab, enter the app's client ID (the string under the app name) and secret,
+   plus your Reddit username, then click **Save & Test**.
+
+The login is stored in `reddit_credentials.json` next to the app (excluded from git). Once it's set,
+accounts that only had estimates are looked up again. Reddit allows about 100 lookups a minute, so
+large lists take a while.
 
 ## File Format Requirements
 
