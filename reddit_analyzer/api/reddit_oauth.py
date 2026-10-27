@@ -12,7 +12,7 @@ import platform
 import threading
 
 import requests
-from config import CREDENTIALS_FILE, REQUEST_TIMEOUT, make_session
+from reddit_analyzer.config import CREDENTIALS_FILE, REQUEST_TIMEOUT, make_session
 
 TOKEN_URL = 'https://www.reddit.com/api/v1/access_token'
 OAUTH_URL = 'https://oauth.reddit.com'

@@ -5,8 +5,8 @@ import collections
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from skip_list import DEFAULT_SKIPS
-from .activity_views import ActivityViewsMixin, extract_subreddit, iter_jsonl
+from reddit_analyzer.core.skip_list import DEFAULT_SKIPS
+from reddit_analyzer.gui.widgets.activity_views import ActivityViewsMixin, extract_subreddit, iter_jsonl
 
 
 class SubredditAnalysisTab(ActivityViewsMixin, ttk.Frame):

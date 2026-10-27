@@ -5,7 +5,7 @@ import json
 import time
 import datetime
 import threading
-from config import CACHE_FILE, CACHE_SAVE_INTERVAL, STATUS_CODES, UNKNOWN_RETRY_DAYS
+from reddit_analyzer.config import CACHE_FILE, CACHE_SAVE_INTERVAL, STATUS_CODES, UNKNOWN_RETRY_DAYS
 
 # Global cache and lock
 CACHE = {}

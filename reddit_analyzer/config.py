@@ -3,6 +3,8 @@
 import requests
 from requests.adapters import HTTPAdapter
 
+from reddit_analyzer.paths import data_file
+
 # Network configuration
 REQUEST_TIMEOUT = 6
 MAX_WORKERS = 12
@@ -30,13 +32,14 @@ PUBLIC_API_BACKOFF = 600
 
 # Application configuration
 PAGE_SIZE = 1000
-CACHE_FILE = 'creation_cache.json'
+# Data files live in the data folder (see paths.py)
+CACHE_FILE = data_file('creation_cache.json')
 CACHE_SAVE_INTERVAL = 30  # seconds between cache writes during a batch of lookups
 # Days to reuse a lookup Reddit didn't answer before retrying it
 UNKNOWN_RETRY_DAYS = 7
-SKIP_LIST_FILE = 'skip_list.txt'
+SKIP_LIST_FILE = data_file('skip_list.txt')
 # Optional Reddit OAuth app credentials, edited in the Settings tab. Keep out of version control.
-CREDENTIALS_FILE = 'reddit_credentials.json'
+CREDENTIALS_FILE = data_file('reddit_credentials.json')
 
 # Status codes
 # 'unknown' means Reddit gave no definitive answer (blocked, rate limited, server error, timeout).

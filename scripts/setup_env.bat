@@ -1,5 +1,8 @@
 @echo off
 REM Setup script for Windows
+REM Work from the repository root, wherever this script is run from
+cd /d "%~dp0.."
+
 echo Creating virtual environment...
 python -m venv venv
 

@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import pytz
 
-from timestamps import parse_timestamp_utc
+from reddit_analyzer.core.timestamps import parse_timestamp_utc
 
 TIMEZONES = [
     ('UTC', 'UTC'),

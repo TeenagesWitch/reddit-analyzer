@@ -115,7 +115,7 @@ To get real dates and status (deleted, suspended, active):
 2. In the **Settings** tab, enter the app's client ID (the string under the app name) and secret,
    plus your Reddit username, then click **Save & Test**.
 
-The login is stored in `reddit_credentials.json` next to the app (excluded from git). Once it's set,
+The login is stored in `data/reddit_credentials.json` (excluded from git). Once it's set,
 accounts that only had estimates are looked up again. Reddit allows about 100 requests a minute; when
 its bulk endpoint is available (Save & Test says so), one request covers up to 100 accounts, and only
 accounts it can't answer fall back to one request each.
@@ -177,7 +177,7 @@ For reproducibility and to avoid conflicts with system packages, use a virtual e
 #### Windows:
 ```bash
 # Run the setup script
-setup_env.bat
+scripts\setup_env.bat
 
 # Or manually:
 python -m venv venv
@@ -189,10 +189,10 @@ pip install -r requirements.txt
 #### Linux/macOS:
 ```bash
 # Make the script executable (first time only)
-chmod +x setup_env.sh
+chmod +x scripts/setup_env.sh
 
 # Run the setup script
-./setup_env.sh
+./scripts/setup_env.sh
 
 # Or manually:
 python3 -m venv venv
@@ -234,6 +234,13 @@ pip install -r requirements.txt
 ## Notes
 
 - API requests are cached to improve performance and reduce rate limiting
+- The cache, skip list and Reddit login are kept in the `data/` folder next to `reddit.py`
+  (excluded from git). Files left in the project folder by older versions are moved there on first start.
+  Set `REDDIT_ANALYZER_DATA_DIR` to keep them somewhere else.
 - Large datasets are processed efficiently with pagination
 - All timestamps are handled in UTC and can be converted to local timezones
 - The application validates file structure before processing to prevent errors
+
+## Development
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the project layout and how to run the tests.

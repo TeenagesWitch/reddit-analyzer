@@ -1,15 +1,18 @@
-"""Reddit API functions for fetching account information."""
+"""Account lookups: status and creation date for Reddit usernames.
+
+Asks Reddit (through OAuth when logged in, else the public API) and falls
+back to Arctic Shift's first known activity when Reddit gives no date.
+"""
 
 import time
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-import reddit_auth
-from config import (SESSION, REQUEST_TIMEOUT, STATUS_CODES, ARCTIC_SHIFT_URL, PUBLIC_API_BACKOFF,
-                    MAX_WORKERS)
-from cache import CACHE, CACHE_LOCK, is_reusable_entry, store_entry
-from timestamps import parse_timestamp_utc
+from reddit_analyzer.api import arctic_shift, reddit_oauth
+from reddit_analyzer.config import SESSION, REQUEST_TIMEOUT, STATUS_CODES, PUBLIC_API_BACKOFF, MAX_WORKERS
+from reddit_analyzer.core.cache import CACHE, CACHE_LOCK, is_reusable_entry, store_entry
+from reddit_analyzer.core.timestamps import parse_timestamp_utc
 
 # Until this time.time(), skip Reddit's public JSON: it refused a recent request
 _public_api_blocked_until = 0.0
@@ -35,64 +38,14 @@ def _fetch_reddit_about(author: str):
     is skipped for PUBLIC_API_BACKOFF seconds instead of being retried per user.
     """
     global _public_api_blocked_until
-    if reddit_auth.has_credentials():
-        return reddit_auth.fetch_user_about(author)
+    if reddit_oauth.has_credentials():
+        return reddit_oauth.fetch_user_about(author)
     if time.time() < _public_api_blocked_until:
         return None, None
     data, status = _fetch_about_json(author)
     if status in (403, 429):
         _public_api_blocked_until = time.time() + PUBLIC_API_BACKOFF
     return data, status
-
-
-def _fetch_arctic_user(author: str):
-    """Return (account_id, first_seen, last_seen) from Arctic Shift's user index.
-
-    One request covers both posts and comments. account_id is the base-36 id
-    without 't2_'. Any value is None if unknown.
-    """
-    try:
-        resp = SESSION.get(f'{ARCTIC_SHIFT_URL}/api/users/search', params={'author': author},
-                           timeout=REQUEST_TIMEOUT)
-        if not resp.ok:
-            return None, None, None
-        rows = resp.json().get('data') or []
-    except (requests.RequestException, ValueError, AttributeError):
-        return None, None, None
-    for row in rows:
-        if str(row.get('author', '')).lower() != author.lower():
-            continue
-        meta = row.get('_meta') or {}
-        firsts = [parse_timestamp_utc(meta.get(k)) for k in ('earliest_post_at', 'earliest_comment_at')]
-        lasts = [parse_timestamp_utc(meta.get(k)) for k in ('last_post_at', 'last_comment_at')]
-        firsts = [dt.date() for dt in firsts if dt]
-        lasts = [dt.date() for dt in lasts if dt]
-        return row.get('id') or None, (min(firsts) if firsts else None), (max(lasts) if lasts else None)
-    return None, None, None
-
-
-def _fetch_arctic_first_activity(author: str):
-    """Return the earliest post or comment date from Arctic Shift search, or None.
-
-    Fallback for users missing from the user index, which is only updated infrequently.
-    """
-    dates = []
-    for kind in ('posts', 'comments'):
-        try:
-            resp = SESSION.get(f'{ARCTIC_SHIFT_URL}/api/{kind}/search',
-                               params={'author': author, 'sort': 'asc', 'limit': 1}, timeout=REQUEST_TIMEOUT)
-            if not resp.ok:
-                continue
-            payload = resp.json()
-            items = payload.get('data', payload) if isinstance(payload, dict) else payload
-            if isinstance(items, list) and items:
-                ts = items[0].get('created_utc') or items[0].get('created') or items[0].get('timestamp')
-                dt = parse_timestamp_utc(ts)
-                if dt:
-                    dates.append(dt.date())
-        except (requests.RequestException, ValueError):
-            continue
-    return min(dates) if dates else None
 
 
 def describe_creation_date(birth_date: str, source: str) -> str:
@@ -112,7 +65,7 @@ def get_cached_account_info(author: str):
     """Return the cached (status_code, birth_date, last_activity, source), or None if it needs a new lookup."""
     with CACHE_LOCK:
         e = CACHE.get(author.lower())
-        if not is_reusable_entry(e, reddit_auth.has_credentials()):
+        if not is_reusable_entry(e, reddit_oauth.has_credentials()):
             return None
         return (
             e.get('status_code', STATUS_CODES['unknown']),
@@ -133,8 +86,8 @@ def _finish_lookup(author, status_code, created_date, definitive, arctic, used_o
         birth_date, source = created_date.strftime('%Y-%m-%d'), 'True'
     else:
         if arctic is None:
-            arctic = _fetch_arctic_user(author)
-        first_seen = arctic[1] or _fetch_arctic_first_activity(author)
+            arctic = arctic_shift.fetch_user_index(author)
+        first_seen = arctic[1] or arctic_shift.fetch_first_activity(author)
         if first_seen:
             birth_date, source = first_seen.strftime('%Y-%m-%d'), 'Estimated'
     if arctic and arctic[2]:
@@ -157,7 +110,7 @@ def _finish_lookup(author, status_code, created_date, definitive, arctic, used_o
 
 def _lookup_uncached(author, arctic=None):
     """Look up one account with a per-user Reddit request (plus Arctic Shift if needed)."""
-    used_oauth = reddit_auth.has_credentials()
+    used_oauth = reddit_oauth.has_credentials()
     data, status_code_raw = _fetch_reddit_about(author)
     # Only a 200 or 404 from Reddit tells us the account's real status.
     definitive = status_code_raw == 404 or (status_code_raw == 200 and isinstance(data, dict))
@@ -229,13 +182,13 @@ def lookup_accounts(usernames, on_result, cancel=None, max_workers=MAX_WORKERS):
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(pending))) as ex:
         # Bulk chunks, for as long as Reddit accepts the bulk endpoint
-        while pending and reddit_auth.bulk_available():
+        while pending and reddit_oauth.bulk_available():
             if cancelled():
                 return False
-            chunk, pending = pending[:reddit_auth.BULK_MAX_IDS], pending[reddit_auth.BULK_MAX_IDS:]
-            arctic = dict(zip(chunk, ex.map(_fetch_arctic_user, chunk)))
+            chunk, pending = pending[:reddit_oauth.BULK_MAX_IDS], pending[reddit_oauth.BULK_MAX_IDS:]
+            arctic = dict(zip(chunk, ex.map(arctic_shift.fetch_user_index, chunk)))
             ids = [a[0] for a in arctic.values() if a[0]]
-            bulk = (reddit_auth.fetch_users_by_ids(ids) if ids else None) or {}
+            bulk = (reddit_oauth.fetch_users_by_ids(ids) if ids else None) or {}
             leftovers = []
             for u in chunk:
                 data = bulk.get(arctic[u][0]) if arctic[u][0] else None

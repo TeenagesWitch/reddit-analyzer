@@ -1,7 +1,7 @@
 """Skip list management for filtering usernames."""
 
 import os
-from config import SKIP_LIST_FILE
+from reddit_analyzer.config import SKIP_LIST_FILE
 
 DEFAULT_SKIPS = set()
 

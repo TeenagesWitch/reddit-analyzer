@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from gui.tabs import (
+from reddit_analyzer.gui.tabs import (
     SubredditAnalysisTab,
     CreationYearTab,
     OverlappingUsersTab,

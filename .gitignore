@@ -20,10 +20,15 @@ ENV/
 *~
 
 # Application specific
+# Runtime data (cache, skip list, Reddit login); see reddit_analyzer/paths.py
+data/
+# Where older versions kept the same files
 skip_list.txt
 creation_cache.json
 creation_cache.json.tmp
 reddit_credentials.json
+# Test runs
+.pytest_cache/
 reddit.spec
 reddit.spec.exe
 

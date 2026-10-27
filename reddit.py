@@ -19,7 +19,7 @@ if sys.version_info < (3, 8):
     print(f"Current version: {sys.version}")
     sys.exit(1)
 
-from gui.main_app import MainApp
+from reddit_analyzer.gui.main_app import MainApp
 
 if __name__ == '__main__':
     app = MainApp()

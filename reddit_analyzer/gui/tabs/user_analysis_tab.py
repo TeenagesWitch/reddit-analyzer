@@ -5,7 +5,7 @@ import collections
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from .activity_views import ActivityViewsMixin, extract_subreddit, iter_jsonl
+from reddit_analyzer.gui.widgets.activity_views import ActivityViewsMixin, extract_subreddit, iter_jsonl
 
 
 class UserAnalysisTab(ActivityViewsMixin, ttk.Frame):

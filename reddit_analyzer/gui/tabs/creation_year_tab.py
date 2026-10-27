@@ -8,10 +8,10 @@ import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from config import PAGE_SIZE, STATUS_LABELS
-from cache import flush_cache
-from skip_list import DEFAULT_SKIPS
-from reddit_api import get_cached_account_info, describe_creation_date, lookup_accounts
+from reddit_analyzer.config import PAGE_SIZE, STATUS_LABELS
+from reddit_analyzer.core.cache import flush_cache
+from reddit_analyzer.core.skip_list import DEFAULT_SKIPS
+from reddit_analyzer.api.accounts import get_cached_account_info, describe_creation_date, lookup_accounts
 
 
 class CreationYearTab(ttk.Frame):

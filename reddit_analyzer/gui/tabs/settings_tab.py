@@ -5,9 +5,10 @@ import webbrowser
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import reddit_auth
-from config import SKIP_LIST_FILE, CREDENTIALS_FILE
-from skip_list import load_skip_list
+from reddit_analyzer.api import reddit_oauth
+from reddit_analyzer.config import SKIP_LIST_FILE, CREDENTIALS_FILE
+from reddit_analyzer.core import skip_list
+from reddit_analyzer.core.skip_list import load_skip_list
 
 REDDIT_APPS_URL = 'https://www.reddit.com/prefs/apps'
 
@@ -73,7 +74,7 @@ class SettingsTab(ttk.Frame):
         self.api_status_label.grid(row=7, column=0, columnspan=3, sticky='w', pady=(6, 0))
 
     def _load_credentials(self):
-        creds = reddit_auth.load_credentials()
+        creds = reddit_oauth.load_credentials()
         self.client_id_var.set(creds['client_id'])
         self.client_secret_var.set(creds['client_secret'])
         self.reddit_username_var.set(creds['username'])
@@ -95,7 +96,7 @@ class SettingsTab(ttk.Frame):
             messagebox.showerror('Missing client ID', 'Enter the client ID of your Reddit app.')
             return
         try:
-            reddit_auth.save_credentials(creds)
+            reddit_oauth.save_credentials(creds)
         except Exception as e:
             messagebox.showerror('Error', f'Failed to save the login: {e}')
             return
@@ -103,7 +104,7 @@ class SettingsTab(ttk.Frame):
         self.api_status_label.config(text=f'Saved to {CREDENTIALS_FILE}. Testing...')
 
         def worker():
-            ok, message = reddit_auth.check_connection()
+            ok, message = reddit_oauth.check_connection()
             self.after(0, lambda: self._on_test_done(ok, message))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -116,7 +117,7 @@ class SettingsTab(ttk.Frame):
         if not messagebox.askyesno('Remove login', 'Remove the saved Reddit API login?'):
             return
         try:
-            reddit_auth.save_credentials({'client_id': '', 'client_secret': '', 'username': ''})
+            reddit_oauth.save_credentials({'client_id': '', 'client_secret': '', 'username': ''})
         except Exception as e:
             messagebox.showerror('Error', f'Failed to remove the login: {e}')
             return
@@ -139,7 +140,6 @@ class SettingsTab(ttk.Frame):
             with open(self.skip_list_path, 'w', encoding='utf-8') as f:
                 f.write(content + '\n')
             # Reload the skip list module's default skips
-            import skip_list
             skip_list.DEFAULT_SKIPS.clear()
             skip_list.DEFAULT_SKIPS.update(load_skip_list(self.skip_list_path))
             self.status_label.config(text='Skip list saved and reloaded.')

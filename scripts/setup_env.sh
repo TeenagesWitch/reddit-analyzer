@@ -1,6 +1,9 @@
 #!/bin/bash
 # Setup script for Linux/macOS
 
+# Work from the repository root, wherever this script is run from
+cd "$(dirname "$0")/.." || exit 1
+
 echo "Creating virtual environment..."
 python3 -m venv venv
 
