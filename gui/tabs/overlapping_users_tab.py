@@ -6,12 +6,11 @@ import threading
 import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import MAX_WORKERS, STATUS_LABELS
+from config import STATUS_LABELS
 from cache import flush_cache
 from skip_list import DEFAULT_SKIPS
-from reddit_api import get_account_info, describe_creation_date
+from reddit_api import lookup_accounts, describe_creation_date
 
 
 class OverlappingUsersTab(ttk.Frame):
@@ -117,30 +116,23 @@ class OverlappingUsersTab(ttk.Frame):
     def _fetch_creation_dates(self, usernames, overlap_counts):
         results = []
         total = len(usernames)
-        completed = 0
+        lock = threading.Lock()
 
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(usernames))) as ex:
-            futures = {ex.submit(get_account_info, u): u for u in usernames}
-            for fut in as_completed(futures):
-                u = futures[fut]
+        def on_result(u, info):
+            status_code, birth, _, source = info
+            year = 'Unknown'
+            if birth and birth != 'Unknown':
                 try:
-                    status_code, birth, _, source = fut.result()
-                    year = 'Unknown'
-                    if birth and birth != 'Unknown':
-                        try:
-                            year = int(birth.split('-')[0])
-                        except Exception:
-                            pass
-                    status_label = STATUS_LABELS.get(status_code, 'unknown')
-                    results.append({'username': u, 'count': overlap_counts[u], 'date': birth, 'source': source,
-                                    'year': year, 'status': status_label})
-                except Exception:
-                    results.append({'username': u, 'count': overlap_counts[u], 'date': 'Unknown', 'source': 'Unknown',
-                                    'year': 'Unknown', 'status': 'unknown'})
+                    year = int(birth.split('-')[0])
+                except ValueError:
+                    pass
+            with lock:
+                results.append({'username': u, 'count': overlap_counts[u], 'date': birth, 'source': source,
+                                'year': year, 'status': STATUS_LABELS.get(status_code, 'unknown')})
+                completed = len(results)
+            self.after(0, lambda: self._update_progress(completed, total))
 
-                completed += 1
-                self.after(0, lambda c=completed: self._update_progress(c, total))
-
+        lookup_accounts(usernames, on_result)
         flush_cache()
         results.sort(key=lambda x: (x['year'] if isinstance(x['year'], int) else 9999, x['username'].lower()))
         self.results = results

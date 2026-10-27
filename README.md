@@ -116,8 +116,12 @@ To get real dates and status (deleted, suspended, active):
    plus your Reddit username, then click **Save & Test**.
 
 The login is stored in `reddit_credentials.json` next to the app (excluded from git). Once it's set,
-accounts that only had estimates are looked up again. Reddit allows about 100 lookups a minute, so
-large lists take a while.
+accounts that only had estimates are looked up again. Reddit allows about 100 requests a minute; when
+its bulk endpoint is available (Save & Test says so), one request covers up to 100 accounts, and only
+accounts it can't answer fall back to one request each.
+
+While you view a page of the Creation Year Distribution, the following pages are looked up in the
+background, so **Next** is usually instant.
 
 ## File Format Requirements
 

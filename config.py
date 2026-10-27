@@ -1,12 +1,29 @@
 """Configuration constants for the Reddit Analyzer application."""
 
 import requests
+from requests.adapters import HTTPAdapter
 
 # Network configuration
-SESSION = requests.Session()
-SESSION.headers.update({'User-Agent': 'AuthorTools/0.1'})
 REQUEST_TIMEOUT = 6
 MAX_WORKERS = 12
+
+
+def make_session():
+    """A requests Session whose connection pool fits every worker thread.
+
+    The default pool keeps only 10 connections per host, so extra threads
+    would open (and then throw away) a fresh TLS connection per request.
+    Room for two batches covers a page load overlapping a background prefetch.
+    """
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=MAX_WORKERS * 2)
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+    return session
+
+
+SESSION = make_session()
+SESSION.headers.update({'User-Agent': 'AuthorTools/0.1'})
 ARCTIC_SHIFT_URL = 'https://arctic-shift.photon-reddit.com'
 # Seconds to stop trying Reddit's public JSON after it refuses a request (403/429)
 PUBLIC_API_BACKOFF = 600

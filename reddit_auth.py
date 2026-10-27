@@ -12,13 +12,17 @@ import platform
 import threading
 
 import requests
-from config import CREDENTIALS_FILE, REQUEST_TIMEOUT
+from config import CREDENTIALS_FILE, REQUEST_TIMEOUT, make_session
 
 TOKEN_URL = 'https://www.reddit.com/api/v1/access_token'
 OAUTH_URL = 'https://oauth.reddit.com'
 # Seconds to wait before asking for a token again after Reddit rejects the credentials
 AUTH_RETRY_DELAY = 300
+# Most accounts one user_data_by_account_ids request may ask for
+BULK_MAX_IDS = 100
 
+# One kept-alive session, so OAuth requests don't each open a new TLS connection
+_session = make_session()
 _lock = threading.Lock()
 _credentials = {}
 _token = None
@@ -29,6 +33,8 @@ _auth_retry_at = 0.0
 # None means unknown (no response seen since the window reset).
 _rate_remaining = None
 _rate_reset_at = 0.0
+# Set when Reddit refuses the bulk endpoint, so lookups go back to one request per user
+_bulk_disabled = False
 
 
 class AuthError(Exception):
@@ -59,17 +65,23 @@ def save_credentials(creds, path=CREDENTIALS_FILE):
 
 def set_credentials(creds):
     """Use these credentials from now on, discarding any token from the old ones."""
-    global _credentials, _token, _token_expires, _auth_error, _auth_retry_at
+    global _credentials, _token, _token_expires, _auth_error, _auth_retry_at, _bulk_disabled
     with _lock:
         _credentials = dict(creds)
         _token = None
         _token_expires = 0.0
         _auth_error = None
         _auth_retry_at = 0.0
+        _bulk_disabled = False
 
 
 def has_credentials():
     return bool(_credentials.get('client_id'))
+
+
+def bulk_available():
+    """True if lookups may use the bulk endpoint (logged in, and Reddit hasn't refused it)."""
+    return has_credentials() and not _bulk_disabled
 
 
 def user_agent():
@@ -99,7 +111,7 @@ def _get_token():
             # "Installed app" credentials have no secret
             data = {'grant_type': 'https://oauth.reddit.com/grants/installed_client',
                     'device_id': 'DO_NOT_TRACK_THIS_DEVICE'}
-        resp = requests.post(TOKEN_URL, auth=(client_id, secret), data=data,
+        resp = _session.post(TOKEN_URL, auth=(client_id, secret), data=data,
                              headers={'User-Agent': user_agent()}, timeout=REQUEST_TIMEOUT)
         try:
             payload = resp.json()
@@ -147,42 +159,85 @@ def _record_rate_limit(resp):
         _rate_reset_at = time.time() + reset
 
 
-def fetch_user_about(author):
-    """GET /user/<author>/about through OAuth.
+def _oauth_get(path, params=None):
+    """Rate-limited GET on oauth.reddit.com, refreshing the token once on a 401.
 
-    Returns (data dict or None, HTTP status or None). None status means the
-    lookup failed without an answer from Reddit (bad credentials, network error).
+    Returns the response, or None if no request could be made or it failed
+    without an answer (bad credentials, network error).
     """
     global _token
     for attempt in range(2):
         try:
             token = _get_token()
         except (AuthError, requests.RequestException):
-            return None, None
+            return None
         _acquire_request_slot()
         try:
-            resp = requests.get(f'{OAUTH_URL}/user/{author}/about', params={'raw_json': 1},
+            resp = _session.get(f'{OAUTH_URL}{path}', params=params,
                                 headers={'Authorization': f'bearer {token}', 'User-Agent': user_agent()},
                                 timeout=REQUEST_TIMEOUT)
         except requests.RequestException:
-            return None, None
+            return None
         _record_rate_limit(resp)
         if resp.status_code == 401 and attempt == 0:
             # Token expired or revoked; get a fresh one and retry once
             with _lock:
                 _token = None
             continue
-        if resp.status_code == 200:
-            try:
-                return resp.json().get('data', {}), 200
-            except ValueError:
-                return None, None
-        return None, resp.status_code
-    return None, None
+        return resp
+    return None
+
+
+def fetch_user_about(author):
+    """GET /user/<author>/about through OAuth.
+
+    Returns (data dict or None, HTTP status or None). None status means the
+    lookup failed without an answer from Reddit (bad credentials, network error).
+    """
+    resp = _oauth_get(f'/user/{author}/about', {'raw_json': 1})
+    if resp is None:
+        return None, None
+    if resp.status_code == 200:
+        try:
+            return resp.json().get('data', {}), 200
+        except (ValueError, AttributeError):
+            return None, None
+    return None, resp.status_code
+
+
+def fetch_users_by_ids(account_ids):
+    """Look up to BULK_MAX_IDS accounts in one request via /api/user_data_by_account_ids.
+
+    account_ids are base-36 ids without the 't2_' prefix. Returns {id: data}
+    for the accounts Reddit returned, or None if the request failed. Accounts
+    Reddit leaves out (suspended, deleted, unknown) are simply missing.
+    If Reddit refuses the endpoint itself, bulk lookups are switched off.
+    """
+    global _bulk_disabled
+    if not account_ids:
+        return {}
+    ids = ','.join(f't2_{i}' for i in account_ids[:BULK_MAX_IDS])
+    resp = _oauth_get('/api/user_data_by_account_ids', {'ids': ids})
+    if resp is None:
+        return None
+    if resp.status_code in (400, 403, 404, 405):
+        _bulk_disabled = True
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or 'error' in payload:
+        _bulk_disabled = True
+        return None
+    return {key[3:] if key.startswith('t2_') else key: value
+            for key, value in payload.items() if isinstance(value, dict)}
 
 
 def check_connection():
-    """Check the current credentials with a token request and one lookup. Returns (ok, message)."""
+    """Check the current credentials with a token request and lookups. Returns (ok, message)."""
     if not has_credentials():
         return False, 'No client ID set. Lookups use Reddit\'s public API, which usually refuses them.'
     try:
@@ -192,9 +247,16 @@ def check_connection():
     except requests.RequestException as e:
         return False, f'Could not reach Reddit: {e}'
     data, status = fetch_user_about('reddit')
-    if status == 200 and data and data.get('created_utc'):
-        return True, 'Connected. Lookups will use real creation dates and status from Reddit.'
-    return False, f'Got a token, but the test lookup failed (HTTP {status}).'
+    if not (status == 200 and data and data.get('created_utc')):
+        return False, f'Got a token, but the test lookup failed (HTTP {status}).'
+    message = 'Connected. Lookups will use real creation dates and status from Reddit.'
+    # u/spez is account t2_1w72
+    bulk = fetch_users_by_ids(['1w72'])
+    if bulk and (bulk.get('1w72') or {}).get('created_utc'):
+        message += ' Bulk lookups work (up to 100 accounts per request).'
+    else:
+        message += ' Bulk lookups are unavailable, so each account takes one request.'
+    return True, message
 
 
 # Initialize credentials on import

@@ -7,12 +7,11 @@ import datetime
 import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import PAGE_SIZE, MAX_WORKERS, STATUS_LABELS, STATUS_CODES
+from config import PAGE_SIZE, STATUS_LABELS
 from cache import flush_cache
 from skip_list import DEFAULT_SKIPS
-from reddit_api import get_account_info, get_cached_account_info, describe_creation_date
+from reddit_api import get_cached_account_info, describe_creation_date, lookup_accounts
 
 
 class CreationYearTab(ttk.Frame):
@@ -28,6 +27,8 @@ class CreationYearTab(ttk.Frame):
         self._user_pages = []
         self._current_usernames = []
         self._all_results = []
+        # Set to stop the background prefetch of upcoming pages
+        self._prefetch_cancel = None
 
         self._build_ui()
 
@@ -52,6 +53,8 @@ class CreationYearTab(ttk.Frame):
         self.cache_hits_label = ttk.Label(ctrl, text='Cache hits: 0')
         self.cache_hits_label.pack(side='left', padx=8)
         ttk.Checkbutton(ctrl, text='Skip usernames ending with "bot"', variable=self.skip_bots_var).pack(side='left', padx=8)
+        self.prefetch_label = ttk.Label(ctrl, text='', foreground='gray')
+        self.prefetch_label.pack(side='left', padx=8)
 
         mid = ttk.Frame(self)
         mid.pack(fill='both', expand=True)
@@ -121,6 +124,7 @@ class CreationYearTab(ttk.Frame):
         if not path or not os.path.isfile(path):
             messagebox.showerror('Missing file', 'Select a valid .txt file containing usernames.')
             return
+        self._stop_prefetch()
         self._user_pages = self._init_pages_from_file(path)
         self._page_index = 0
         if not self._user_pages:
@@ -148,6 +152,8 @@ class CreationYearTab(ttk.Frame):
             self._load_page(self._page_index)
 
     def _load_page(self, page_index: int):
+        # The page load takes over: anything the prefetch already cached is reused
+        self._stop_prefetch()
         self._current_usernames = list(self._user_pages[page_index])
         # Only one page may load at a time, or a slower earlier fetch overwrites the newer page's results
         self.analyze_btn.config(state='disabled')
@@ -166,36 +172,53 @@ class CreationYearTab(ttk.Frame):
             self.after(0, self._on_page_results_ready)
 
     def _fetch_page_results(self, usernames):
-        results = []
-        cache_hits = 0
-        users_to_fetch = []
-        for u in usernames:
-            cached = get_cached_account_info(u)
-            if cached:
-                results.append(self._make_record(u, cached))
-                cache_hits += 1
-            else:
-                users_to_fetch.append(u)
+        cache_hits = sum(1 for u in usernames if get_cached_account_info(u))
         self.after(0, lambda: self.cache_hits_label.config(text=f'Cache hits: {cache_hits}'))
-        if users_to_fetch:
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(users_to_fetch)))) as ex:
-                fut_map = {ex.submit(self._fetch_single_user_record, u): u for u in users_to_fetch}
-                completed = 0
-                for fut in as_completed(fut_map):
-                    u = fut_map[fut]
-                    try:
-                        rec = fut.result()
-                    except Exception:
-                        rec = self._make_record(u, (STATUS_CODES['unknown'], 'Unknown', 'Unknown', 'Unknown'))
-                    results.append(rec)
-                    completed += 1
-                    self.after(0, lambda c=completed + cache_hits: self.progress.config(value=c))
-            flush_cache()
+        results = []
+        lock = threading.Lock()
+
+        def on_result(username, info):
+            with lock:
+                results.append(self._make_record(username, info))
+                done = len(results)
+            self.after(0, lambda: self.progress.config(value=done))
+
+        lookup_accounts(usernames, on_result)
+        flush_cache()
         results.sort(key=lambda rr: (rr['year'] if isinstance(rr['year'], int) else 9999, rr['username'].lower()))
         return results
 
-    def _fetch_single_user_record(self, username: str) -> dict:
-        return self._make_record(username, get_account_info(username))
+    def _start_prefetch(self, first_page):
+        """Look up the pages from first_page on in the background, so Next is quick."""
+        self._stop_prefetch()
+        if first_page >= len(self._user_pages):
+            return
+        cancel = threading.Event()
+        self._prefetch_cancel = cancel
+        pages = list(self._user_pages[first_page:])
+        total = len(self._user_pages)
+
+        def show(text):
+            # Don't let a stopped prefetch overwrite the label of the one that replaced it
+            self.after(0, lambda: cancel.is_set() or self.prefetch_label.config(text=text))
+
+        def worker():
+            try:
+                for offset, page in enumerate(pages):
+                    show(f'Prefetching page {first_page + offset + 1} / {total}...')
+                    if not lookup_accounts(page, lambda u, info: None, cancel=cancel):
+                        return
+                show(f'Pages {first_page + 1}-{total} ready')
+            finally:
+                flush_cache()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_prefetch(self):
+        if self._prefetch_cancel is not None:
+            self._prefetch_cancel.set()
+            self._prefetch_cancel = None
+        self.prefetch_label.config(text='')
 
     @staticmethod
     def _make_record(username, account_info) -> dict:
@@ -213,6 +236,7 @@ class CreationYearTab(ttk.Frame):
         self.analyze_btn.config(state='normal')
         self._update_nav_buttons()
         self.progress.config(value=0)
+        self._start_prefetch(self._page_index + 1)
         dist = {}
         confirmed = {}
         for r in self._all_results:
