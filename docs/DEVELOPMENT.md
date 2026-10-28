@@ -32,11 +32,12 @@ reddit-analyzer/
 │   ├── paths.py                     # Locates data/ and moves files left by older versions
 │   ├── core/
 │   │   ├── cache.py                 # Persistent account cache (creation_cache.json)
+│   │   ├── rate_limit.py            # Thread-safe request pacing (RateLimiter)
 │   │   ├── skip_list.py             # Usernames to ignore (skip_list.txt)
 │   │   └── timestamps.py            # Unix/ISO timestamp parsing to UTC
 │   ├── api/
 │   │   ├── accounts.py              # get_account_info / lookup_accounts: status + creation date
-│   │   ├── arctic_shift.py          # Arctic Shift client: account ids, first/last activity
+│   │   ├── arctic_shift.py          # Arctic Shift client, rate limited: account ids, first/last activity
 │   │   └── reddit_oauth.py          # Optional Reddit OAuth login, rate limiting, bulk lookups
 │   └── gui/
 │       ├── main_app.py              # Main window with the tabbed interface
@@ -71,6 +72,17 @@ built with PyInstaller), regardless of the folder the app is started from:
 
 Older versions wrote these to the current folder. On first start they are moved into `data/`.
 Set the `REDDIT_ANALYZER_DATA_DIR` environment variable to use another folder; then nothing is moved.
+
+## External Services
+
+Every request to an outside service goes through its client module, never through `SESSION` directly:
+
+- **Arctic Shift** (`api/arctic_shift.py`): free service, so all calls go through `_get()`, which
+  uses one shared `RateLimiter` (2 requests/second, 2 in flight), waits out 429s using the
+  `X-RateLimit-Reset` headers, backs off on 5xx/network errors and pauses for 5 minutes after
+  6 failures in a row. Tune with the `ARCTIC_SHIFT_*` settings in `config.py`.
+- **Reddit OAuth** (`api/reddit_oauth.py`): follows Reddit's `x-ratelimit-*` headers (about 100
+  requests a minute per app).
 
 ## Testing
 

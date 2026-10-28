@@ -12,8 +12,24 @@ os.environ['REDDIT_ANALYZER_DATA_DIR'] = tempfile.mkdtemp(prefix='reddit-analyze
 
 import pytest  # noqa: E402
 
-from reddit_analyzer.api import accounts, reddit_oauth  # noqa: E402
+from reddit_analyzer.api import accounts, arctic_shift, reddit_oauth  # noqa: E402
 from reddit_analyzer.core import cache  # noqa: E402
+from reddit_analyzer.core.rate_limit import RateLimiter  # noqa: E402
+
+
+class FakeClock:
+    """A clock whose sleep() advances time instantly, for rate-limit tests."""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
 
 
 class FakeResponse:
@@ -37,5 +53,18 @@ def clean_state():
     reddit_oauth._rate_remaining = None
     reddit_oauth._rate_reset_at = 0.0
     accounts._public_api_blocked_until = 0.0
+    arctic_shift._failure_streak = 0
+    arctic_shift._outage_until = 0.0
     yield
     cache.CACHE.clear()
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    """Arctic Shift limiter and outage timer on a fake clock, so waits take no real time."""
+    clock = FakeClock()
+    monkeypatch.setattr(arctic_shift, 'LIMITER', RateLimiter(
+        arctic_shift.ARCTIC_SHIFT_MAX_RPS, arctic_shift.ARCTIC_SHIFT_MAX_CONCURRENT,
+        clock=clock, sleep=clock.sleep))
+    monkeypatch.setattr(arctic_shift, '_clock', clock)
+    return clock

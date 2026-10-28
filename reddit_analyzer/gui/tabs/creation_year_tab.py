@@ -188,15 +188,19 @@ class CreationYearTab(ttk.Frame):
         results.sort(key=lambda rr: (rr['year'] if isinstance(rr['year'], int) else 9999, rr['username'].lower()))
         return results
 
-    def _start_prefetch(self, first_page):
-        """Look up the pages from first_page on in the background, so Next is quick."""
+    def _start_prefetch(self, page_index):
+        """Look up one page in the background, so Next is quick.
+
+        Only the next page is fetched, not every remaining one: pages you
+        never open would be wasted requests to Arctic Shift and Reddit.
+        """
         self._stop_prefetch()
-        if first_page >= len(self._user_pages):
+        if page_index >= len(self._user_pages):
             return
         cancel = threading.Event()
         self._prefetch_cancel = cancel
-        pages = list(self._user_pages[first_page:])
-        total = len(self._user_pages)
+        page = list(self._user_pages[page_index])
+        label = f'page {page_index + 1} / {len(self._user_pages)}'
 
         def show(text):
             # Don't let a stopped prefetch overwrite the label of the one that replaced it
@@ -204,11 +208,9 @@ class CreationYearTab(ttk.Frame):
 
         def worker():
             try:
-                for offset, page in enumerate(pages):
-                    show(f'Prefetching page {first_page + offset + 1} / {total}...')
-                    if not lookup_accounts(page, lambda u, info: None, cancel=cancel):
-                        return
-                show(f'Pages {first_page + 1}-{total} ready')
+                show(f'Prefetching {label}...')
+                if lookup_accounts(page, lambda u, info: None, cancel=cancel):
+                    show(f'Next {label} ready')
             finally:
                 flush_cache()
 

@@ -82,6 +82,25 @@ def test_creation_year_labels_and_confirmed_column(app):
     assert ('Est', '≤ 2019-03-11 (first activity)', 'unknown') in rows
 
 
+def test_prefetch_looks_up_only_the_next_page(app, monkeypatch):
+    import time
+    from reddit_analyzer.gui.tabs import creation_year_tab
+    tab = app['CreationYearTab']
+    requested = []
+    monkeypatch.setattr(creation_year_tab, 'lookup_accounts',
+                        lambda names, on_result, cancel=None: requested.append(list(names)) or True)
+    monkeypatch.setattr(creation_year_tab, 'flush_cache', lambda: None)
+    monkeypatch.setattr(tab, 'after', lambda ms, fn=None: None)   # no Tk mainloop in tests
+    tab._user_pages = [['a1', 'a2'], ['b1', 'b2'], ['c1', 'c2'], ['d1', 'd2']]
+    tab._start_prefetch(1)
+    deadline = time.time() + 5
+    while not requested and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)
+    tab._prefetch_cancel = None
+    assert requested == [['b1', 'b2']]
+
+
 def test_overlap_usernames_are_case_insensitive(app, tmp_path):
     tab = app['OverlappingUsersTab']
     first, second = tmp_path / 'a.txt', tmp_path / 'b.txt'

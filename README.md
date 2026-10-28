@@ -120,8 +120,23 @@ accounts that only had estimates are looked up again. Reddit allows about 100 re
 its bulk endpoint is available (Save & Test says so), one request covers up to 100 accounts, and only
 accounts it can't answer fall back to one request each.
 
-While you view a page of the Creation Year Distribution, the following pages are looked up in the
+While you view a page of the Creation Year Distribution, the next page is looked up in the
 background, so **Next** is usually instant.
+
+### Being considerate to Arctic Shift
+
+Arctic Shift is a free service, and its documentation asks clients to stay at "a couple requests per
+second". The app keeps to that across all its threads:
+
+- At most 2 requests per second, evenly spaced, with no more than 2 in flight at once
+- After a `429 Too Many Requests` it waits as long as the `X-RateLimit-Reset` header says, then retries
+- After server or network errors it backs off (2s, 4s, 8s...), and after 6 failures in a row it stops
+  asking Arctic Shift for 5 minutes; lookups in the meantime are left unknown and retried later
+- Only the next page is prefetched, never the whole list
+
+This means an uncached account takes about half a second, so a 1,000-user page with no cache hits
+takes roughly 8–10 minutes. Cached accounts need no requests at all. The limits are the
+`ARCTIC_SHIFT_*` settings in `reddit_analyzer/config.py`.
 
 ## File Format Requirements
 
